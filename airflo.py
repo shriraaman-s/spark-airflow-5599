@@ -17,7 +17,7 @@ emr_client = boto3.client('emr', region_name=region_name)
 s3_client = boto3.client('s3',region_name=region_name)
 livy_url = 'http://{master_dns}:8998/batches'
 
-   
+#read config file 
 def read_config(**kwargs):
 
     bucket_name=kwargs['dag_run'].conf.get('land_bucket', 'shriraaman.s-landingbucket-01')
