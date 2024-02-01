@@ -65,7 +65,7 @@ class AppConfigProcessor:
         return source_sou, source_dest, source_tran
 
 
-
+#applying transformations
     def apply_transformations(self, df, transformations):
         print("Applying transformations...")
         column_to_join=transformations['to_string']['location']
