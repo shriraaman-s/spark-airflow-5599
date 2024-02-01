@@ -6,7 +6,7 @@ from pyspark.sql import functions as F
 from datetime import datetime
 from pyspark.sql.window import Window
 
-
+#fullclass
 class AppConfigProcessor:
     def __init__(self,spark,app_config_path):
         self.spark = spark
