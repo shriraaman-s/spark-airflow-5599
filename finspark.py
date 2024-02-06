@@ -105,9 +105,9 @@ class AppConfigProcessor:
 
 
 def main():
-    app_config_path = "s3://shriraaman.s-landingbucket-01/source/app-config.json"
-    delta_loc="s3://shriraaman.s-landingbucket-01/source/lookup/"
-
+    delta_loc = sys.argv[2]
+    app_config_path = sys.argv[3]
+    
     # Create a Spark session
     spark = SparkSession.builder.master("yarn").appName("SparkSQLDemoa").config("spark.jars.packages", "io.delta:delta-core_2.12:1.0.0").config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension").config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog").getOrCreate()
     
@@ -117,40 +117,22 @@ def main():
     
     try:
         app_processor = AppConfigProcessor(spark, app_config_path)
-        if len(sys.argv[1]) == 2:
-            file_1 = str(sys.argv[1][0])
-            file_2 = str(sys.argv[1][1])
-            
-            df_a,active_des,active_tran=app_processor.process_and_write(file_1)
-            df_v,view_des,view_tran=app_processor.process_and_write(file_2)
+        file_= str(sys.argv[1])
         
-            masked_df_a = app_processor.apply_transformations(df_a, active_tran)
-            masked_df_v = app_processor.apply_transformations(df_v, view_tran)
-            masked_df_v.write.partitionBy("month","date").mode("overwrite").parquet(view_des)
-            masked_df_a.write.partitionBy("month","date").mode("overwrite").parquet(active_des)
-            
-            if "actives" in file_1:
-                df=app_processor.lookup_table(masked_df_a,delta_loc)
-                df = df.repartition(1)
-                df.write.format("delta").mode("append").save(delta_loc)
-                
-            if "actives" in file_2:
-                df=app_processor.lookup_table(masked_df_v,delta_loc)
-                df = df.repartition(1)
-                df.write.format("delta").mode("append").save(delta_loc)
-            
-        else:
-            file_ = str(sys.argv[1][0])
-            
-            df_v,view_des,view_tran=app_processor.process_and_write(file_2)
+        df_a,active_des,active_tran=app_processor.process_and_write(file_)
+        #df_v,view_des,view_tran=app_processor.process_and_write('viewership')
+    
+        masked_df_a = app_processor.apply_transformations(df_a, active_tran)
+        #masked_df_v = app_processor.apply_transformations(df_v, view_tran)
+        #masked_df_v.write.partitionBy("month","date").mode("overwrite").parquet(view_des)
+        masked_df_a.write.partitionBy("month","date").mode("overwrite").parquet(active_des)
         
-            masked_df_v = app_processor.apply_transformations(df_v, view_tran)
-            masked_df_v.write.partitionBy("month","date").mode("overwrite").parquet(view_des)
+        if "actives" in file_:
+            df=app_processor.lookup_table(masked_df_a,delta_loc)
+            df = df.repartition(1)
+            df.write.format("delta").mode("append").save(delta_loc)
+            
         
-            if "actives" in file_:
-                df=app_processor.lookup_table(masked_df_v,delta_loc)
-                df = df.repartition(1)
-                df.write.format("delta").mode("append").save(delta_loc)
         
                       
     finally:
