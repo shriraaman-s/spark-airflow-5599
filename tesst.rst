@@ -716,6 +716,7 @@ Manager Agent :meth:`/ManagerAgent <api.manager_agent>`
 Generate a list of tasks to be executed by other agents.
 
 **Returns**
+
 * ``task_list`` : list
     A list of tasks to be executed for the user's query.
 
