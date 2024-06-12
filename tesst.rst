@@ -758,6 +758,7 @@ Orchestrator Agent :meth:`/Orchestrator <api.orchestrator_agent>`
 The ``/Orchestrator`` endpoint executes a subgoal by orchestrating the execution of multiple agents.The agent coordinates the execution of these tasks and returns a comprehensive summary along with various insights.
 
 **Returns**
+
 - ``final_summary`` (str): The final summary of the subgoal.
 - ``rag_content`` (str): The content provided by the RAG agent.
 - ``web_content`` (str): The content provided from the web.
