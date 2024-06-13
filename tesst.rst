@@ -1,1116 +1,666 @@
 .. include:: ../../links.rst
-.. _autonomous-agents-usage-ref:
+.. _autonomous-agents-architecture-ref:
 
-Usage
-+++++
 
-Understand the source code
-==========================
+Architecture
+++++++++++++
 
-Please check the introduction, code walkthrough, and KT of the **Autonomous Agents** source code `here <url_autonomous_agents_20_>`_.
+Overview
+========
 
-.. _autonomous-agents-data-folders-ref:
+*Autonomous Agents* take a business question from the user (related to structured, and unstructured datasets) and come up with a solution approach to solve the question and assign tasks to various agents depending on the data availability and complexity of the question.
 
-Setting up the Input Data Folders
-=================================
+The current version of *Autonomous Agents* is capable of handling business questions from the end user that involve performing tasks related to SQL data gathering, visualization, insights generation, model building, summarizing, etc. The below agents with targeted individual persona and skill sets are developed to that extent:
 
-Autonomous agents can accept inputs in various formats based on the use case. This can include SQL databases, CSV files, or unstructured data such as text ( PDFs, PPTs, etc.).
 
-Below is the structure of the data folder:
-`Click here <url_autonomous_agents_01_>`_ to download the sample data.
+#. :meth:`Manager agent <autonomous_agents.agents.ManagerAgent>`
+#. :meth:`SQL data processor agent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>`
+#. :meth:`Plotly chart generator agent <autonomous_agents.insights_pro_agents.PlotlyVisualizerAgent>`
+#. :meth:`Insights generator agent <autonomous_agents.insights_pro_agents.InsightsGeneratorAgent>`
+#. :meth:`Python developer agent <autonomous_agents.agents.PythonDataAgent>`
+#. :meth:`Python modelling agent <autonomous_agents.agents.PythonModellingAgent>`
+#. :meth:`RAG Agent <autonomous_agents.agents.RAGAgent>`
+#. :meth:`Summarizer agent <autonomous_agents.agents.SummarizerAgent>`
 
-Prepare a folder with your domain name and create the following sub-folders (please make sure that the folder names are exactly as added below). You can find the sample folder here.
 
-   - ``data_dictionary``: Add all data dictionary JSON files created in the previous steps in this folder
-   - ``data_glossary``: Add the data glossary TXT files in this folder.
-   - ``db``: Add the db file created in the previous steps in this folder. Note that, this db file is not required when using an external database (such as MySQL, Snowflake, etc.).
-   - ``output_folder``: Output folder where the outputs will be saved. You can leave this empty.
 
+Architecture Flowchart
+======================
+.. note::
+
+    Note that the below Architecture is one possible solution for using Autonomous agents. This architecture may vary based on the data available and the complexity of the use case. It is recommended to use individual components available and orchestrate the solution based on the use case.
+
+.. figure:: ../../images/autonomous_agents/architecture_diagram.png
+    :align: center
+    :name: autonomous-agents-architecture-diagram
+
+    Autonomous Agents architecture (one possible out of many)
+
+
+Understanding the Flow
+======================
+
+.. _autonomous-agents-glossary-terms-ref:
+
+Question refactoring (glossary keywords)
+----------------------------------------
+When the end users ask questions like "What are the sales of Omega", since the app doesn't have context of what "Omega" is, it can't generate an appropriate response. To facilitate this, we have included a ``glossary_terms.csv`` file where the user can business-specific glossary, common terminology, and keywords. The user question is refactored to give the agents a better understanding of the terms used by the users. Refer to :meth:`question refactor function <autonomous_agents.utils.get_question_after_refactoring>` for more details.
+
+
+For example, a sample ``glossary_terms.csv`` file looks like:
+
++-------------+-------------------------+------------+
+| **keyword** | **keyword_in_the_data** | **entity** |
++-------------+-------------------------+------------+
+| Omega       | OMEGA                   | brand      |
++-------------+-------------------------+------------+
+
+We can add all variants of the keywords in separate rows in this file (Ex: Omega and omega can be two separate line entries). Mention the equivalent value available for the keyword in the data and the entity mentioned in the `entity` column will be used to add extra phrasing to the user question as shown in the example below:
 
 .. code-block:: text
     :linenos:
 
-    Project folder
-        |- db
-            |- SQL database .db file (or) CSVs
-        |- data_dictionary
-            |- data dictionary JSON of the tables
-        |- data_glossary
-            |- unstructured text data
-        |- output_folder
+    Input question - What are the sales of Omega?
+    Refactored input question -  What are the sales of OMEGA where 'OMEGA' is a brand?
 
 
+First, if some unstructured (text) data exists, the user's question, referred to as the **Goal**, is sent to the ``RAG Agent``. Here information relevant to the user's question will be extracted. If the unstructured data (or text documents) has enough information to answer the question, the tool will summarize the available information and respond to the user. If the text documents don't have enough information, the tool retrieves relevant information that can be used later as an additional context by other agents. If the first attempt doesn't retrieve any information from the unstructured data, we change the parameters (chunk size, overlap between the chunks) and retry until a configurable limit is reached.
 
-Update the backend data
------------------------
-
-Get the data and the data dictionary from the client and mask the data, if needed. Rename the CSV data files to the table names that you want to appear in the SQL queries (don't add any client names/ information in the table names).
-
-If the client doesn't have the data dictionary, then prepare one (Reference). Each table should have one data dictionary with the following keys (please make sure that the column names are exactly as added below).
-
-  - ``table_name``:  Make sure the table name is mentioned correctly.
-  - ``columns``: The value for this key is a list of n dictionaries where n is the number of columns in the table. The key-value pairs for these dictionaries are mentioned below
-  - ``column_name``: Column name
-  - ``column_description``: Description of the column
-
-The below keys are not mandatory but it's good to have them.
-
-  - ``id``: Boolean indicating if the column is an ID column. You can leave this blank if the column isn't an ID column and mark it as ``"Yes"`` only for the ID columns
-  - ``unique values``: Leave this column blank or mention all the unique values. The above notebook will create unique values for some of the columns based on some heuristic logic. Please check the outputs and also make necessary changes before using this column
-  - ``units of measurement``: For example, if a column has distance data, mention if it is km or meters or any other unit of measure. Leave it blank if it is not relevant
-
-You can add any other columns that you think are relevant and non-blank values will be added as it is to the prompt. Please consider that the models have token limits and will not work if we add more and more data to the prompt.
-
-**Example for Data Dictionary**
-
-.. code-block:: yaml
-    :linenos:
-
-    {
-    "table_name": "Employee_details",
-    "columns": [
-        {
-            "name": "EmployeeID",
-            "description": "Unique identifier for each employee",
-            "id": "Yes"
-        },
-        {
-            "name": "FirstName",
-            "description": "First name of the employee"
-        },
-        {
-            "name": "LastName",
-            "description": "Last name of the employee"
-        },
-        {
-            "name": "Salary",
-            "description": "Employee's salary (must be a positive value)"
-        }
-        {
-            "name": "DateJoined",
-            "description": "Date when the employee joined the company"
-        }
-        {
-            "name": "Department",
-            "description": "Employee's department (maximum length of 50 characters)."
-        }
-    ]
-    }
-
-Instructions for preparing the data dictionary
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Please refer to `this document <url_autonomous_agents_06_>`_ for detailed instructions on setting up the data and preparing a data dictionary.
-
-A notebook for creating the data dictionary JSON files in the required formats from the cvs can be found `here <url_autonomous_agents_09_>`_. The notebook also adds additional columns like unique values to the data dictionary.
-
-You can also create a CSV file and convert it into a JSON file. The instructions are given further below on how to do it. The instructions for columns of this CSV file are the same as mentioned below 'columns'.
-
-  #. Column description should be accurate and relevant in the context of the dataset.
-  #. In case of a column having values like ``1`` or ``0`` or ``True`` or ``False``, describe what each of them means in the context of the data.
-  #. For columns with ordinal data, mention the order of importance. For example - column name: priority, column description: Priority is between (1 (Highest) to 5 (Lowest)); Each Incident has a priority.
-  #. In case there is an abbreviated version of a term in the column name, it is recommended to write the full form of that term in the column description. For example - *column name*: made_sla, *column description*: There is a service level Agreement for each priority by when this needs to be resolved; this column helps to know if the SLA was Met or not.
-  #. Mask the columns that have sensitive information like client names, account names or numbers, etc.
-  #. Convert the dataset to a database file. You can use this code to do the same.
-  #. Convert the data dictionaries to JSON formats that can be consumed by the Insights Pro. You can use this code to do the same.
-  #. Prepare a data glossary containing any additional information that you want to feed to the LLM while getting the answers (Ex: KPI measurement definitions etc) in TXT format (Reference).
-
-Instructions for preparing the data glossary
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-We can create and add a Data glossary file that contains business and KPI information. This information will be passed as a context to the LLM to assist in getting results that are aligned with the business expectations. This file may contain any business-specific abbreviations, formulas, KPI definitions for the business, or understandings of the data.
-
-An example data glossary file for a Supply chain dataset is added `here <url_autonomous_agents_07_>`_.
-
-
-Config setup
-============
-
-There are a total of 6 config files. Four of them are for InsightsPro, and the remaining two are for Autonomous Agents.
-
-+---------------------------+------------------------------------+
-| InsightsPro configs       | ``user_config.yaml``               |
-|                           +------------------------------------+
-|                           | ``data_config.yaml``               |
-|                           +------------------------------------+
-|                           | ``model_config.yaml``              |
-|                           +------------------------------------+
-|                           | ``debug_config.yaml``              |
-+---------------------------+------------------------------------+
-| Autonomous Agents configs | ``agents_description_config.yaml`` |
-|                           +------------------------------------+
-|                           | ``agents_prompt_config.yaml``      |
-+---------------------------+------------------------------------+
-
-
-Refer to `this link <url_autonomous_agents_04_>`_ to get sample configs. The next section covers *Autonomous Agents* configs. For details of Insights_pro configs refer to :ref:`insights-pro-code-walkthrough-sql-generator-ref` in insights pro documentation and :ref:`data-config-setup-ref` .
-
-Agents Description Config
--------------------------
-
-This config is used to list the available agents that can perform tasks. It contains ``name``, ``description``, ``allowed_inputs`` and ``returned_outputs``. Users can also enable or disable the agents from this config with the help of the ``enabled`` variable.
-
-There are 2 lists of agents.
-
-#. ``available_agent_manager`` - This list of agents will be used by the :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>` to assign the sub-tasks.
-#. ``available_agents_orchestrator`` - This list of agents will be used by the orchestrator to get the answer to the question asked by the user.
-
-Below is an example for ``available_agent_manager``.
-
-.. code-block:: yaml
-  :linenos:
-
-  [
-    {
-      name: PythonDataAgent,
-      enabled: true,
-      description: "Given a general task question this agent generates a Python code to answer the question and generate required data. It is capable of data cleaning, feature engineering, and any complex data-related operations. It can ONLY take data as input and generate data as output.",
-      allowed_inputs: ["data-csv"],
-      returned_outputs: ["data-csv"],
-    },
-    {
-      name: DataProcessorSQLAgent,
-      enabled: true,
-      description: "Given a general task question this agent generates a complex SQL query to answer the question and generate required data. It can ONLY take data as input and generate data as output.",
-      allowed_inputs: ["data-csv", "data-sql"],
-      returned_outputs: ["data-csv"],
-    },
-    {
-      name: PlotlyVisualizerAgent,
-      enabled: true,
-      description: "This agent ONLY takes in processed data from DataProcessorSQLAgent agent or PythonDataAgent and questions as context to generate plotly visualizations. It can ONLY take data as input and generate plots as output.",
-      allowed_inputs: ["data-csv"],
-      returned_outputs: ["chart"],
-    },
-    {
-      name: InsightsGeneratorAgent,
-      enabled: true,
-      description: "This agent ONLY takes in processed data from DataProcessorSQLAgent agent or PythonDataAgent and question as context to generate insights to answer the given question. It can ONLY take in data as input and generate insights as output.",
-      allowed_inputs: ["data-csv"],
-      returned_outputs: ["insights"],
-    },
-    {
-      name: PythonModellingAgent,
-      enabled: false,
-      description: "This agent utilizes processed data from the data_processor_sql or PythonAgent and question as context, to build machine learning or deep learning models in Python. It can ONLY take data as input and generate model, predictions as output.",
-      allowed_inputs: ["data-csv"],
-      returned_outputs: ["model", "data-csv"],
-    },
-    {
-      name: "AutogenModelingAgent",
-      enabled: false,
-      description: "This agent utilizes processed data from the data_processor_sql or PythonAgent and question as context to build machine learning or deep learning models in Python. It can ONLY take data as input and generate model, predictions as output.",
-      allowed_inputs: ["data-csv"],
-      returned_outputs: ["model", "data-csv"],
-    },
-  ]
-
-
-Below is an example for ``available_agents_orchestrator``.
-
-.. code-block:: yaml
-    :linenos:
-
-    [
-      {
-        name: "ManagerAgent",
-        enabled: true,
-        description: "This agent serves as a manager, coordinating and overseeing the activities of other agents in the system."
-      },
-      {
-        name: RAGAgent,
-        enabled: true,
-        description: "This agent takes on the task of retrieving data from unstructured documents (policy or legal documents) and generating insights to answer the given question.",
-      },
-      {
-        name: "SummarizerAgent",
-        enabled: true,
-        description: "This agent specializes in summarizing information, condensing lengthy content to provide concise and informative summaries."
-      }
-    ]
-
-To add a new agent, the agent details must be added to this list.
-
-Agents Prompt Config
---------------------
-
-This config is similar to the model config used in *InsightsPro*. It includes details about model parameters and prompt templates. These details include prompts for all available agents specified in the ``agents_description_config.yaml`` file. Additionally, it also includes prompts utilized by the :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>` (for task breakdown, reflection, etc.) and the :meth:`SummarizerAgent <autonomous_agents.agents.SummarizerAgent>`. Each agent may have more than one LLM call, and all the prompts should be incorporated into this config file.
-
-Following is an example of :meth:`PythonCodeGenerator <autonomous_agents.actions.PythonCodeGenerator>` agent:
-
-.. code-block:: yaml
-    :linenos:
-
-    PythonDataAgent:
-      static_prompt: |
-        You are an expert Python developer and data scientist who excels in writing efficient, elegant, and coherent working code to solve data science and Python problems using the data provided.
-
-        Your task is to ONLY write Python code to solve the problem such that new data is returned.
-
-        You will be given a data dictionary and path to a CSV file for which you need to write Python code to answer the question.
-        You may also be given additional context in the form of research titled "Research" and a plan titled "Plan". Ignore if not provided. You may use this to answer the question ONLY if it's relevant. Else ignore.
-
-        Remember to properly format code using backticks as follows.
-        For code ALWAYS use
-        ```python
-        ```
-
-        The resulting output of the code SHOULD always be new data.
-
-        Question:
-        {question}
-
-        Research:
-        {web_research}
-
-        Plan:
-        {plan}
-
-        Data Dictionary:
-        {data_dictionary}
-
-        Data Path: {data_path}
-        ALWAYS use whatever data path is provided above to load the data.
-
-        Remember to follow the below scenario of outputs always when generating code:
-        1. When performing operations on the data, the code should ALWAYS save the output DataFrame to a CSV file as {output_path}/data_output.csv
-
-        Follow the below Guidelines when generating code:
-        1. The response should ALWAYS contain a code block and output type block.
-        2. Avoid mere repetition of historical code. Always aim to generate novel and appropriate responses to the questions at hand.
-
-        ...
-
-        1.   Never have unnamed columns in the DataFrame. When using the pivot function or groupby or when manually creating new columns, make sure the names are verbose and meaningful.
-
-.. _data-config-setup-ref:
-
-Data Folder and Configuration Setup
------------------------------------
-#. Data Folder Setup:
-    Create a folder named data to store all data-related files in the project folder.
-#. Download Zip Folders:
-    Download zip folders for each domain and save them in the data folder.
-#. Domain Folder Structure:
-    Each domain folder should contain the following details:
-        * **data_dictionary**: Contains data dictionaries for tables.
-        * **data_glossary**: Contains data glossary for domain-specific terms.
-        * **db**: Contains database files.
-        * **output_folder**: Used for storing output files.
-        * **output_folder_test**: Used for storing test output files.
-#. Usage in Data Configuration File:
-    #. ``input_path``: Either Use the ``data_path`` and ``data_dictionary_path`` if a single data table is required to answer the user question or use the ``sql_data_path`` and ``data_dictionary_sql_path`` if more than one data tables are required to answer the user question. Do not use ``data_path``, ``data_dictionary_path`` and ``sql_data_path``, ``data_dictionary_sql_path`` at the same time.
-            * ``data_path``: Path for **single data table** as an input.
-            * ``data_dictionary_path``: Path for **single data Dictionary** as an input.
-            * ``sql_data_path``: Path for ``database.db`` that contains more than 1 data tables.
-            * ``data_dictionary_sql_path``: Path for ``data_dictionary`` folder that contains multiple data dictionaries.
-            * ``document_path``: Path for the input document (txt/pdf/docs etc) (unstructured data).
-            * ``glossary_terms_path``: Path for ``glossary_terms.csv``, that contains glossary.
-    #. ``context``
-            * ``additional_context``: Additional context for agents
-            * ``summary_context``: Context to be given for summarizing to answer the user question
-    #. ``other``
-            * ``reflect``: True/False: Whether to have an extra LLM call for reflection on the generated task_list
-            * ``force_insights_for_data``: True/False: Whether to force insights agent for the data output
-            * ``use_shared_memory``: True/False: Whether to store the task list and its corresponding output/errors to the vectorDB
-            * ``task_update``: True/False: Whether to update the task list based on the previous task results.
-            * ``manual_task_list``:  Provide manual task list ``list(dict)``
-    #. ``path``
-            * ``input_data_path``: Path where the input data, db files, and output folder (will be created in the code) are saved
-            * ``exclude_table_names``: Table names that need to be excluded
-            * ``data_dictionary_path``: Path where the data dictionaries are available (one JSON file per one table mentioned in the path.input_file_name section of this config)
-            * ``business_overview_path``:  Path to the txt file containing the business overview.
-            * ``api_key_location``:  Path where the API key is stored. This will be added as a temporary environment variable in the code
-            * ``output_path``: Output path where results will be saved
-            * ``exp_name``: Experiment name. A subfolder inside output_path will be created with this name. All results of runs will be saved inside ``output_path/exp_name``
-    #. ``db_params``
-            * ``db_name``: Database name (supports MySQL and SQLite).
-            * ``host``: Hostname.
-            * ``username``: Username.
-            * ``password_path``: Path where the database connection password is stored (valid for MySQL).
-            * ``sqlite_database_path``: Path where the database file for SQLite is stored (can be created using a notebook in project support codes).
-    #. ``cloud_storage``: Define connection parameters for the cloud storage.
-            * ``platform``: Platform of the cloud. Can be blank (for local FS) or "azure".
-            * ``prefix_url``: Azure Blob Storage prefix (typically "abfs://")
-            * ``DefaultEndpointsProtocol``: Indicate whether you want to connect to the storage account through HTTPS or HTTP
-            * ``account_key_path``:  Path where the Account Key is stored.
-            * ``AccountName``: Path in the local FS where the Account Name is stored.
-            * ``EndpointSuffix``: Used for establishing the connection.
-
-How to Run
-==========
-
-This section contains steps on how to run the existing or default set-up of Autonomous agents. Once the Data is placed in the right folders, the config files are updated, and the environment is set up, the following code snippets can be run to initialize and execute the agents.
-
-There are two ways to run the application as listed below.
-
-#. Initialize and run required agents individually. `Please click here to check an example Notebook <url_autonomous_agents_02_>`_
-#. Execute all the agents by orchestrating a flow. `Please click here to check an example Notebook <url_autonomous_agents_03_>`_
-
-
-Run required agents individually
---------------------------------
-
-Import and initialize individual agents
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-#. Import the required Agents
-
-   .. code-block:: python
-      :linenos:
-
-      from autonomous_agents.agents import (
-            ManagerAgent,
-            PythonDataAgent,
-            PythonModellingAgent,
-            )
-      from insights_pro.utils import load_config
-      from autonomous_agents.utils import load_data_dictionary, create_logger
-
-#. Then initialize configs and loggers
-
-   .. code-block:: python
-      :linenos:
-
-      prompt_config = load_config(os.path.join(CONFIG_PATH, "agents_prompt_config.yaml"))
-      agents_config = load_config(os.path.join(CONFIG_PATH, "agents_description_config.yaml"))
-
-      data_dictionary = load_data_dictionary(DATA_DICTIONARY_PATH)
-      data_path = os.path.join(DATA_PATH, "db", "data.csv")
-
-      create_logger(
-            logger_name=LOGGER_NAME,
-            level=DEBUG_LEVEL,
-            log_file_path=None,
-            verbose=True,
-        )
-
-
-ManagerAgent
-^^^^^^^^^^^^^
-
-Generally, the initial step involves converting the user question into multiple sub-tasks. This task is performed by the :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>`, which utilizes the agents listed in the ``agents_config`` to assign the sub-tasks to the available agents. The generated task list then undergoes reflection to merge redundant or duplicate sub-tasks. The below code can be used to use :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>`
-
-  .. code-block:: python
-    :linenos:
-
-    question = "Identify the products that have generally done well at the region level but are continuously underperforming for a few locations."
-
-    manager = ManagerAgent(prompt_config=prompt_config, agents_config=agents_config, reflect=True)
-    available_agent_names = ", ".join([agent["name"] for agent in agents_config.available_agents]).strip()
-
-    response = manager.execute(
-        available_agent_actions=json.dumps(available_agents_actions, indent=4),
-        available_agent_names=available_agent_names,
-        data_dictionary=json.dumps(data_dictionary, indent=4),
-        data_type="data-csv",
-        question=question,
-    )
-
-This results in a list of tasks containing, (``task_id``, ``agent``, ``task_description``, ``dependent_task_id``). Below is an example response:
-
-  .. code-block:: yaml
-    :linenos:
-
-    [(0,
-      'DataProcessorSQLAgent',
-      'Create a SQL query to calculate the average ordered amount and cut amount per product per region and location. The result should include columns for product, region, location, average ordered amount, and average cut amount.',
-      None),
-    (1,
-      'PythonDataAgent',
-      'Process the result from the SQL query to calculate the difference between the average ordered amount and the average cut amount for each at each location and region. This will give us an indication of how well each product is performing at each location and region.',
-      0),
-    (2,
-      'PythonDataAgent',
-      'Identify the products that are performing well at the region level but are underperforming at certain locations. These are the products where the difference between the average ordered amount and the average cut amount is high at the region level but low at certain locations.',
-      1),
-    (3,
-      'PlotlyVisualizerAgent',
-      'Create a visualization to show the performance of each product at the region level and each location. The x-axis should be the product, the y-axis should be the difference between the average ordered amount and the average cut amount, and there should be separate lines for each region and location.',
-      2),
-    (4,
-      'InsightsGeneratorAgent',
-      'Generate insights from the processed data and visualization to identify the products that are generally doing well at the region level but are continuously underperforming for few locations.',
-      2)]
-
-
-Agents that perform sub-tasks
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-All available agents can be initialized and executed similarly. For example, to utilize :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` individually, you can follow the steps below for initialization and execution. Similar procedures can be applied to other available agents. It takes in an input data frame, its data dictionary, and the sub-task.
-
-  .. code-block:: python
-    :linenos:
-
-    python_data_agent = PythonDataAgent(prompt_config=prompt_config, agents_config=agents_config, reflect=True)
-
-    question = "Clean and preprocess the data."
-
-    response = python_data_agent.execute(
-        data=data,
-        data_dictionary=json.dumps(data_dictionary, indent=4),
-        question=question,
-    )
-
-
-This agent first generates a step-by-step plan to solve the user question. Then, it generates a Python code as per the plan, which when executed results in a data frame with processed data. Following is an example response:
-
-  **Plan**:
-
-  .. code-block:: text
-
-      1. Load the data into a pandas dataframe.cloud_storage
-      2. Check for missing values and handle them appropriately. If there are missing values, consider dropping the rows or filling them with appropriate values.
-      3. Check for duplicates and handle them appropriately. If there are duplicates, consider dropping them or aggregating them.
-      ...
-      n. Save the cleaned and preprocessed dataframe to a new file for further analysis.
-
-  **Code**:
-
-  .. code-block:: python
-      :linenos:
-
-      import pandas as pd
-
-      # Load the data into a pandas dataframe
-      data_path = "../../bin/_temp/data.csv"
-      df = pd.read_csv(data_path)
-
-      # Check for missing values and handle them appropriately
-      print("Number of missing values before handling: ", df.isnull().sum().sum())
-      df = df.replace("(null)", pd.NA)
-      df = df.dropna()
-      print("Number of missing values after handling: ", df.isnull().sum().sum())
-
-      # Check for duplicates and handle them appropriately
-      print("Number of duplicates before handling: ", df.duplicated().sum())
-      df = df.drop_duplicates()
-      print("Number of duplicates after handling: ", df.duplicated().sum())
-
-      ...
-
-      print("Output file saved to: ", output_path)
-
-Execute all the agents
-----------------------
-
-Import and initialize AutonomousAgents
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-#. Import the required Agents
-
-   .. code-block:: python
-      :linenos:
-
-      from autonomous_agents.agents import (
-            ManagerAgent,
-            PythonDataAgent,
-            PythonModellingAgent,
-            )
-      from insights_pro.utils import load_config
-      from autonomous_agents.utils import load_data_dictionary, create_logger
-
-#. Then initialize configs, loggers, and, ``AutonomousAgents``
-
-   .. code-block:: python
-      :linenos:
-
-      prompt_config = load_config(os.path.join(CONFIG_PATH, "agents_prompt_config.yaml"))
-      agents_config = load_config(os.path.join(CONFIG_PATH, "agents_description_config.yaml"))
-
-      data_dictionary = load_data_dictionary(DATA_DICTIONARY_PATH)
-      data_path = os.path.join(DATA_PATH, "db", "data.csv")
-
-      create_logger(
-            logger_name=LOGGER_NAME,
-            level=DEBUG_LEVEL,
-            log_file_path=None,
-            verbose=True,
-      )
-
-      autonomousAgents = AutonomousAgents(
-          prompt_config=prompt_config,
-          agents_config=agents_config,
-          logging_level=DEBUG_LEVEL,
-      )
-
-#. Execute the flow in ``orchestrator.py`` using the below code. This will pass the question to an :meth:`RAGAgent <autonomous_agents.agents.RAGAgent>` to get more context to answer the question. Then, the question along with the additional context is passed to the :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>` to break it down into multiple sub-tasks assigned to the available agents, which when executed, generates a solution to all the sub-tasks. Finally, all the responses are then collated and summarized to get a final response to the question by the :meth:`SummarizerAgent <autonomous_agents.agents.SummarizerAgent>`.
-
-   .. code-block:: python
-      :linenos:
-
-      result = autonomousAgents.execute_subgoal(
-          sub_goal=question,
-          output_path=output_path,
-          sql_data_path=os.path.join(DATA_PATH, "supply_chain_management", "db", "database.db"),
-          data_dictionary_sql_path=os.path.join(DATA_PATH, "supply_chain_management", "data_dictionary"),
-          reflect=True,
-          use_shared_memory=True,
-          task_update=True
-      )
+In cases where the unstructured data is not available, the user's question is directly sent to the :meth:`Manager agent <autonomous_agents.agents.ManagerAgent>` without any additional context.
 
 .. note::
 
-  To modify the provided architecture, adjustments can be made to the flow within orchestrator.py. These changes should ensure that the solution architecture aligns with the complexity of the use case and the availability of data.
+    Alternatively, we may use web search agents if there is to get additional context from the web and outside the available data. For example, if the user wants to compare their metrics with industry standards, we may use the web search agents to get the industrial benchmarks.
 
 
-Outputs
-=======
+Task Understanding and Breakdown
+--------------------------------
 
-Refer to the following `link <url_autonomous_agents_05_>`_ to view sample outputs of each run of Autonomous Agents.
+Next, the user's question along with the additional context is passed to the :meth:`Manager agent <autonomous_agents.agents.ManagerAgent>`, which breaks the **Goal** into multiple sub-tasks. :meth:`Manager agent <autonomous_agents.agents.ManagerAgent>` is also responsible for assigning the appropriate Agent to each sub-task and the dependencies between the sub-tasks to create a **Task list**.
 
-Output Folder Structure
-------------------------
-Each agent's output will be saved in a separate folder. Common outputs for the run (logger, configs used, etc) are saved in the experiment's main folder itself
+This generated task list undergoes reflection where the number of sub-tasks in the list is reduced. For example, two consecutive SQL sub-tasks can be combined into one, or if there are SQL or modeling sub-tasks that are related to each other and the intermediate output is not necessary then these sub-tasks are merged to create an updated task list.
 
-.. code-block::
+This task list is added to the :meth:`shared memory <autonomous_agents.shared_memory.SharedMemory>` where the :meth:`Manager agent's <autonomous_agents.agents.ManagerAgent>` response (along with the other agents' responses) are stored.
+
+We also check if there is any :meth:`SQL data processor agent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` that is not used as a data dependency for any agent except :meth:`Plotly chart generator agent <autonomous_agents.insights_pro_agents.PlotlyVisualizerAgent>` and force :meth:`Insights generator agent <autonomous_agents.insights_pro_agents.InsightsGeneratorAgent>` for any such :meth:`SQL data processor agents <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` and update the task list. This is done so that we get better summarizer outputs (instead of returning tables to the end user) for the questions that are dependent on SQL agents. We call this ``forced_insights``, for more information, please check :meth:`add_insights_for_data function <autonomous_agents.AutonomousAgents.add_insights_for_data>`
+
+.. note::
+
+    The current setup undergoes only one layer of task breakdown. For more complex problem statements, we might need multiple layers of breaking down **global-goal** into multiple **sub-goals** and each **sub-goal** into multiple **sub-tasks**.
+
+
+Execution Flow
+--------------
+The sub-tasks generated above will be executed by the assigned agents in order sequentially. They produce Python or SQL codes as outputs, which, when executed, provide answers to the sub-tasks. The output from one or more agents can serve as input for another agent, with dependencies specified in the task list. The final outputs from the agent could be tables, plots, insights (stdout), model objects, csv outputs, error messages, etc.
+
+During execution, the responses produced by each agent are stored in a :meth:`vector database <autonomous_agents.shared_memory.SharedMemory>` and local/ cloud file storage. Additionally, the responses are also added to ``agent_conversation``. After every agent run, we check if there is a need to update the next sub-task based on the generated responses based on the ``agent_conversation`` and dynamically update the task list. We also use ``forced_insights`` while updating the task list.
+
+Summarization
+-------------
+
+Finally, the responses generated by all the agents will be collected and passed to a :meth:`Summarizer agent <autonomous_agents.agents.SummarizerAgent>` which summarizes the responses of each agent (queries, graphs, insights, and other responses) to answer the user question.
+
+.. note::
+
+    Multiple SummarizerAgents should be used when there are multiple layers of task breakdown.
+
+.. _autonomous-agents-components-ref:
+
+Components
+==========
+
+To simplify and enhance the results, agents and helping tools are created. Separate agents are created to perform specific tasks. Helping tools are used to help the agents perform their respective tasks. For example, the :meth:`TaskListGenerator <autonomous_agents.actions.TaskListGenerator>` tool is used to help generate the task list by the manager agent.
+
+
+.. _autonomous-agents-agents-docs-ref:
+.. _autonomous-agents-insights-pro-agents-docs-ref:
+
+Agent
+-----
+Agents are individual building blocks of Autonomous Agents designed to carry out a particular task (code generation (SQL and Python), summarization, task breakdown, modeling, etc) assigned to them. They take the help of tools and data available to them and carry out the task using LLM calls. The current version of Autonomous Agents has the following agents:
+
+Manager Agent
+^^^^^^^^^^^^^
+This agent breaks down the question and generates a task list. It ensures that the task list does not have any ambiguity and the tasks generated are relevant to the original question. This is done by adding a step after task list generation. This step is named reflection, where the task list is passed and the LLM is asked to brainstorm on it and make required changes to the list. The format of the task list generated is as follows.
+
+``[(task_id, agent_name, task_description, input_task_id), (task_id, agent_name, task_description, input_task_id), ...]``
+
+- ``task_id`` - It is a unique ID to which the task is mapped.
+- ``agent_name`` - The Name of the agent that will perform the task.
+- ``task_description`` - The description of the task.
+- ``input_task_id`` - Task ID of the task whose output can be used as an input for the current task.
+
++--------+-------------------------------+
+| Input  | Question                      |
+|        +-------------------------------+
+|        | Data Dictionary               |
+|        +-------------------------------+
+|        | Additional Context (optional) |
+|        +-------------------------------+
+|        | Research (optional)           |
+|        +-------------------------------+
+|        | available_agent_names         |
+|        +-------------------------------+
+|        | available_agent_actions       |
++--------+-------------------------------+
+| Output | Task list                     |
++--------+-------------------------------+
+
+
+For Example, for the input question, ``How do I improve the efficiency of Location 22?``, the output will be:
+
+.. code-block:: yaml
     :linenos:
 
-    Project folder
-        |- output_folder
-            |- orchestrator output
-                |- text_to_query
-                |- PythonDataAgent
-                |- ManagerAgent
-                |- SummarizerAgent
-                |- query_to_chart
-                |- configs_used
-                |- runtime log (txt)
-                |- subgoal (txt)
-                |- task report (JSON)
-                |- Total runtime (txt)
-
-.. _autonomous-agents-add_new-ref:
-
-Adding a new Agent, Action, or a Tool
-=====================================
-
-This section is a guide on how to add another Agent, Tool, or Action.
-
-.. note:: These are the paths.
-
-    - Agents - ``src/autonomous_agents/agents``
-
-    - Tools - ``src/autonomous_agents/tools``
-
-    - Actions - ``src/autonomous_agents/actions``
-
-Adding an Agent
----------------
-To add an Agent one must look into the following steps:
-
-#. Write the code for the agent with all the necessary methods properly defined.
-#. Put the code for agents in the Agents folder, along with all the other agents.
-#. Every agent must inherit :meth:`AgentBase <autonomous_agents.agents.AgentBase>` as it acts as an orchestrator between agents, tools, and actions.
-#. Every agent must inherit the tools that will be used by the agent to execute tasks.
-#. Update ``agents_description_config`` with all the details of the new agent.
-#. Update ``agents_incompatible_with_scaler_input_list`` in :meth:`orchestrator <autonomous_agents.AutonomousAgents>` if the new agent is not compatible with scaler input.
-
-  .. Note:: - Summarizer Agent inherits :meth:`SummarizerUtils <autonomous_agents.tools.SummarizerUtils>` as it will only need the ``generate_summary_dict`` tool to fulfill its purpose
-      - :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` inherits 2 tools
-          - :meth:`CodeUtils <autonomous_agents.tools.CodeUtils>`
-          - :meth:`DataDictionaryUtils <autonomous_agents.tools.DataDictionaryUtils>`
-
-#. Every agent must inherit the actions that will be used by the agent to execute tasks.
-
-  .. Note:: - Manager Agent inherits :meth:`TaskListGenerator <autonomous_agents.actions.TaskListGenerator>` as it will only need the ``task_list_generation`` action to fulfill its purpose
-      - :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` inherits 4 actions
-          - :meth:`DataDictionaryGenerator <autonomous_agents.actions.DataDictionaryGenerator>`
-          - :meth:`PlanGenerator <autonomous_agents.actions.PlanGenerator>`
-          - :meth:`PythonCodeCorrector <autonomous_agents.actions.PythonCodeCorrector>`
-          - :meth:`PythonCodeGenerator <autonomous_agents.actions.PythonCodeGenerator>`
-
-#. The actions and tools must be defined in ``_init_actions`` and ``_init_tools`` respectively.
-
-  .. Note:: The actions and tools will be executed in the exact sequence as mentioned in the ``_init_actions`` and ``_init_tools`` respectively.
-
-#. You can add ``validation_dict``, to the agents which returns a data frame and data dictionary.
-
-Adding an Action
-----------------
-#. Write the code for the action with all the necessary methods.
-#. Put the code for the action in the actions folder, along with all the other actions.
-#. Every action must inherit :meth:`ActionBase <autonomous_agents.actions.ActionBase>` as it acts as an orchestrator.
-#. Prepare a prompt for the action that you are adding and put that in the ``insights_agents_prompts.yaml`` file. the prompt should preferably be named after the action.
-#. Add the prompts for all the agents for which the action will be executed.
-
-  .. Note:: :meth:`PythonCodeGenerator <autonomous_agents.actions.PythonCodeGenerator>` is used for both :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`, hence there are 2 different prompts given for each agent.
-
-#. Add the import statement for the new action in the ``__init__.py`` file inside the actions folder.
-#. Make sure the agent that is using this action has imported it and included it in ``_init_actions``.
-
-
-Adding a Tool
--------------
-#. Write the code for the tool with all the necessary methods.
-#. Put the code for the tool in the tools folder, along with all the other tools.
-#. For every tool, the class name should include Utils for eg. :meth:`DataDictionaryUtils <autonomous_agents.tools.DataDictionaryUtils>`.
-
-
-API Framework
-=============
-
-The API Framework,built using FastAPI,provides a set of endpoints for accessing the agents of the *Autonomous Agents*. 
-
-Run the API Locally
----------------------------
-#. To start the FastAPI server locally using Uvicorn:
-  - Navigate to the directory containing "apicode.py" file.
-    ```cd api/app```
-
-  - Once you're in the correct directory, use the following command to start the server:
-  ```uvicorn apicode:app --reload```
-
-Accessing API Endpoints
------------------------
-#. Determine the URL of the endpoint you want to access by going through the functions of each endpoint in docs.
-#. If the endpoint requires any input data, prepare the request payload accordingly.
-#. Use an HTTP client library, such as ``requests`` in Python, to send an HTTP request to the endpoint URL. Specify the HTTP method and request body as necessary.
-
-Adding an API endpoint
-----------------------
-#. Write the code for the endpoint handler function, which defines the functionality of the endpoint. This function should handle incoming requests, process data as needed, and generate appropriate responses.
-#. Put the code for the endpoint handler function,in the ``apicode.py`` along with other endpoints.
-#. If the endpoint accepts parameters in the request (e.g.,request body), add these parameters in :meth:`Tracks <api.Tracks>` class, including their names, types, and any validation rules.
-#. Define the response returned by the endpoint, specifying the data structure, content type (e.g., JSON), and any possible status codes or error messages.
-
-Endpoints 
----------
-List Agents :meth:`/ListAgents <api.list_agents>`
-^^^^^^^^^^^
-
-The ``/list_agents`` endpoint returns a list of available agents, i.e., agents which are enabled in config for a domain.
-
-**Returns**
-* agent_list (list): List containing all the available agents for the given domain.
-
-**Example**
-Here is an example of how to use the ``/list_agents`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/list_agents"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain"
+    {
+        [
+            {
+                "task_id": 0,
+                "name": "DataProcessorSQLAgent",
+                "description": "Extract all the data from the \"warehouse_metrics_monthly\" table in the SQLite database.",
+                "data_dependency": null
+            },
+            {
+                "task_id": 1,
+                "name": "PythonDataAgent",
+                "description": "Perform feature correlation analysis between \"efficiency\" and all other numerical features in the dataset to identify potential key drivers.",
+                "data_dependency": 0
+            },
+            {
+                "task_id": 2,
+                "name": "PlotlyVisualizerAgent",
+                "description": "Generate a correlation heatmap of \"efficiency\" with all other numerical features to visually identify potential key drivers.",
+                "data_dependency": 0
+            },
+            {
+                "task_id": 3,
+                "name": "PythonModellingAgent",
+                "description": "Build a regression model with \"efficiency\" as the target variable and all other numerical features as predictors. Use the model to identify the most important features driving \"efficiency\".",
+                "data_dependency": 0
+            },
+            {
+                "task_id": 4,
+                "name": "PythonModellingAgent",
+                "description": "Build a regression model for Location 22 with \"efficiency\" as the target variable and all other numerical features as predictors. Use the model to identify the most important features driving \"efficiency\".",
+                "data_dependency": 0
+            },
+            {
+                "task_id": 5,
+                "name": "InsightsGeneratorAgent",
+                "description": "Based on the correlation analysis generate insights about the key drivers of efficiency of Location 22.",
+                "data_dependency": 1
+            }
+        ]
     }
 
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
+Data Processor SQL Agent
+^^^^^^^^^^^^^^^^^^^^^^^^
+Given a general task, this agent generates a complex SQL query to answer the question and generate the required data.
 
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
++--------+---------------------------------------+
+| Input  | Question                              |
+|        +---------------------------------------+
+|        | Database (SQLite/MySQL) or Data (CSV) |
+|        +---------------------------------------+
+|        | Data Dictionary                       |
+|        +---------------------------------------+
+|        | Additional Context (optional)         |
++--------+---------------------------------------+
+| Output | SQL query (SQL)                       |
+|        +---------------------------------------+
+|        | Data Table (CSV)                      |
+|        +---------------------------------------+
+|        | Data Dictionary (JSON)                |
++--------+---------------------------------------+
+
+For Example, for the input Question, ``Extract all the data from the "warehouse_metrics_monthly" table in the SQLite database``, the output will be:
+
+.. code-block:: sql
+    :linenos:
+
+    SELECT * FROM warehouse_metrics_monthly;
+
+Plotly Visualizer Agent
+^^^^^^^^^^^^^^^^^^^^^^^
+This agent takes processed data from :meth:`DataProcessorSQLAgent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` or :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and the question as input to generate plotly visualizations.
+
++--------+---------------------------------------+
+| Input  | Question                              |
+|        +---------------------------------------+
+|        | Data Table                            |
+|        +---------------------------------------+
+|        | Data Dictionary                       |
+|        +---------------------------------------+
+|        | Additional Context (optional)         |
++--------+---------------------------------------+
+| Output | Chart code (py)                       |
+|        +---------------------------------------+
+|        |  Plot (png)                           |
++--------+---------------------------------------+
+
+For Example, for the input Question, ``Generate a correlation heatmap of "efficiency" with all other numerical features to visually identify potential key drivers.``, the output will be:
+
+.. figure:: ../../images/autonomous_agents/sample_image_output.png
+    :align: center
+    :name: Example heatmap
+
+    Example heatmap
+
+For the input Question, ``Generate a time series plot for "on_time_shipment", "turn_around", and "efficiency" metrics for "Location 22" to visualize the performance over time.``, the output will be:
+
+.. figure:: ../../images/autonomous_agents/sample_image_output_2.png
+    :align: center
+    :name: Example chart
+
+    Example chart
 
 
-Manager Agent :meth:`/ManagerAgent <api.manager_agent>`
-^^^^^^^^^^^^^
-Generate a list of tasks to be executed by other agents.
 
-**Returns**
+Insights Generator Agent
+^^^^^^^^^^^^^^^^^^^^^^^^
+This agent takes processed data from the :meth:`DataProcessorSQLAgent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` or :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and the question as input to generate insights on the answer generated for the given question.
 
-* ``task_list`` : list
-    A list of tasks to be executed for the user's query.
++--------+---------------------------------------+
+| Input  | Question                              |
+|        +---------------------------------------+
+|        | Data Table                            |
+|        +---------------------------------------+
+|        | Data Dictionary                       |
+|        +---------------------------------------+
+|        | Additional Context (optional)         |
++--------+---------------------------------------+
+| Output | Text Insights                         |
++--------+---------------------------------------+
 
-**Example**
-Here is an example of how to use the ``/manager_agent`` endpoint in Python:
+.. note::
 
-.. code-block:: python
+    :meth:`Insights generator agent <autonomous_agents.insights_pro_agents.InsightsGeneratorAgent>` should occur at least once in the task list. The reason is that the consolidated list of results is passed to the summarizer agent, and the summarizer agent requires insights to generate the final summary.
 
-    import requests
-    from pprint import pprint
+    A ``force_insights_for_data`` flag is passed in ``orchestrator.py``. This will add 1 or more ``Insights generator agent`` tasks for every task which gives data as an output.
 
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/manager_agent"
+For Example, for the input Question, ``Based on the correlation analysis generate insights about the key drivers of efficiency of Location 22.``, the output will be:
 
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": "Are there any specific source locations that consistently have a low fill rate? If so, what factors contribute to this?",
-        "language": "english",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/warehouse_metrics_monthly.json",
-        "output_path": "../../../examp"
+.. code-block:: yaml
+    :linenos:
+
+    {
+        - The top three features highly correlated with efficiency are 'on_time_shipment', 'on_time_shipment_norm', and 'on_time_in_full', with correlation values of 0.7975644985699883, 0.7975644985699883, and 0.4471465475464717 respectively.
+        - The majority of correlation values (50% to 75%) fall within the range of 0.2654693452454858 to 0.4471465475464717, indicating these features are key drivers of efficiency.
     }
 
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_22_>`_ to view sample output of manager agent output.
-
-
-Orchestrator Agent :meth:`/Orchestrator <api.orchestrator_agent>`
-^^^^^^^^^^^^^^^^^^
-The ``/Orchestrator`` endpoint executes a subgoal by orchestrating the execution of multiple agents.The agent coordinates the execution of these tasks and returns a comprehensive summary along with various insights.
-
-**Returns**
-
-- ``final_summary`` (str): The final summary of the subgoal.
-- ``rag_content`` (str): The content provided by the RAG agent.
-- ``web_content`` (str): The content provided from the web.
-- ``manager_response`` (dict): The response from the Manager agent.
-- ``task_report`` (dict): The task report of each task executed.
-- ``task_tracker`` (dict): The task tracker containing results of each task executed.
-- ``summarizer_response`` (str): The response from the Summarizer agent.
-
-**Example**
-Here is an example of how to use the ``/orchestrator`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/orchestrator"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": "Does on time shipment affect efficiency?",
-        "language": "english",
-        "additional_context": "None",
-        "reflect": True,
-        "sql_data_path": "../../data/supply_chain/db/database.db",
-        "data_dictionary_sql_path": "../../data/supply_chain/data_dictionary/",
-        "manual_task_list": None
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_21_>`_ to view sample output of orchestrator agent output.
-
-
-Python Data Agent :meth:`/PythonDataAgent <api.python_data_agent>`
-^^^^^^^^^^^^^^^^^
-The python_data_agent endpoint allows users to execute data-related tasks using Python scripts.
-
-**Returns**
-* ``plan`` (str): The plan for solving the user's question.
-* ``code_gen`` (str): The generated Python code.
-* ``data_dict`` (dict): JSON representation of the output data dictionary.
-* ``code_stdout`` (str): Std output generated.
-* ``data`` (dict): JSON representation of the output data
-
-**Example**
-Here is an example of how to use the ``/python_data_agent`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/python_data_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": 'Calculate the correlation between "on_road_time" and "efficiency" to understand their relationship.',
-        "language": "english",
-        "data_path": "../../data/supply_chain/db/carrier_metrics_monthly.csv",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/carrier_metrics_monthly.json"
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        # Pretty-print the response JSON data
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        # Print the response data in case of failure
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_23_>`_ to view sample output of python data agent output.
-
-Python Model Agent :meth:`/PythonModelAgent <api.python_model_agent>`
-^^^^^^^^^^^^^^^^^^
-The python_model_agent endpoint allows users to perform modeling tasks using Python scripts.
-
-**Returns**
-* ``plan`` (str): The plan for solving the user's question.
-* ``code_gen`` (str): The generated Python code.
-* ``data_dict`` (dict): JSON representation of the output data dictionary.
-* ``code_stdout`` (str): Std output generated.
-* ``data`` (dict): JSON representation of the output data
-
-**Example**
-Here is an example of how to use the ``/python_model_agent`` endpoint in Python:
 
-.. code-block:: python 
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/python_model_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": 'Calculate the correlation between "efficiency" and other metrics using a correlation matrix.',
-        "language": "english",
-        "data_path": "../../data/supply_chain/db/carrier_metrics_monthly.csv",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/carrier_metrics_monthly.json"
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        # Pretty-print the response JSON data
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        # Print the response data in case of failure
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_24_>`_ to view sample output of python model agent output.
-
-
-SQL Agent :meth:`/SQLAgent <api.sql_agent>`
-^^^^^^^^^
-
-The ``/sql_agent`` endpoint allows users to perform data processing tasks using SQL queries.This endpoint returns the SQL query, the output data generated by the query, and an output data dictionary.
-
-**Returns**
-* ``query`` (str): The SQL query.
-* ``output_data`` (str): Output data generated by the query.
-* ``dictionary`` (dict): Output data dictionary.
-
-**Example**
-Here is an example of how to use the ``/sql_agent`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/sql_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": 'Extract the "on_road_time" and "efficiency" columns from the "carrier_metrics_monthly" table in the database.',
-        "language": "english",
-        "data_path": "../../data/supply_chain/db/carrier_metrics_monthly.csv",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/carrier_metrics_monthly.json"
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        # Pretty-print the response JSON data
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        # Print the response data in case of failure
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_25_>`_ to view sample output of sql agent output.
-
-
-Plot Agent :meth:`/PlotAgent <api.plot_agent>`
-^^^^^^^^^^
-Generate plots and visualizations.
-
-**Returns**
-* ``df`` (pandas.DataFrame) : The data used for chart generation.
-* ``chart`` (dict): The generated chart in JSON format.
-
-**Example**
-Here is an example of how to use the ``/plot_agent`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/plot_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": "Generate a line plot showing the monthly trend of efficiency for each carrier",
-        "language": "english",
-        "data_path": "../../data/supply_chain/db/carrier_metrics_monthly.csv",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/carrier_metrics_monthly.json"
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_26_>`_ to view sample output of plot agent output.
-
-
-Insights Agent :meth:`/InsightsAgent <api.insights_agent>`
-^^^^^^^^^^^^^^
-Generate insights based on data analysis.
-
-**Returns**
-* ``insights`` (dict) : The generated insights.
-	
-**Example**
-Here is an example of how to use the ``/insights_agent`` endpoint in Python:
-
-.. code-block:: python
-
-    import requests
-    from pprint import pprint
-
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/insights_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": "Generate insights on the carriers with above and below average on-time shipment rates.",
-        "language": "english",
-        "data_path": "../../data/supply_chain/db/warehouse_metrics_monthly.csv",
-        "data_dictionary_path": "../../data/supply_chain/data_dictionary/warehouse_metrics_monthly.json"
-    }
-
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_27_>`_ to view sample output of plot agent output.
-
-Summarizer Agent :meth:`/SummarizerAgent <api.summarizer_agent>`
+Python Developer agent
+^^^^^^^^^^^^^^^^^^^^^^
+Given a general question, this agent generates a Python code to answer the question and generate the required data. This agent is capable of data cleaning, feature engineering, and any complex data-related operations in Python. It can only take data as input and generate data as output.
+
++--------+-------------------------------+
+| Input  | Question                      |
+|        +-------------------------------+
+|        | Research (optional)           |
+|        +-------------------------------+
+|        | Plan                          |
+|        +-------------------------------+
+|        | Data Dictionary               |
+|        +-------------------------------+
+|        | Input Data Path               |
+|        +-------------------------------+
+|        | Output Folder Path            |
++--------+-------------------------------+
+| Output | Output data (CSV)             |
++--------+-------------------------------+
+
+**Flow**
+These 5 activities will be performed for the Python Developer/ Python Modeling agents:
+
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PlanGenerator``           | Generates plan that will be executed by ``PythonCodeGenerator``. This is needed because the manager generates the high-level task description which needs multiple further sub-steps to be performed to successfully perform the task                                                                                                                                                                                                            |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``DataDictionaryGenerator`` | Uses ``DataDictionaryUtils`` to add new keys in the data dictionary [num_unique, top_most_occurring_values, num_missing_values, descriptive_statistics (mean, median, mode)] . If any new columns are generated by previous tasks, we update the data dictionary of those columns alone in this. If the columns are used as it is from the input table, their corresponding descriptions are also taken as it is from the data dictionary.       |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PythonCodeGenerator``     | Generates the code, and executes it by ``CodeUtils``.                                                                                                                                                                                                                                                                                                                                                                                            |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PythonCodeCorrector``     | Corrects the code, if any error is encountered. The original code that is generated in the previous step and the error message is passed to the LLM call for getting the updated and corrected code                                                                                                                                                                                                                                              |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``DataDictionaryGenerator`` | Creates a new data dictionary for newly generated columns. If the previous steps create any new columns or rename any columns, the data dictionary is updated for those columns alone.                                                                                                                                                                                                                                                           |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+For Example, for the input Question, ``Perform feature correlation analysis between "efficiency" and all other numerical features in the dataset to identify potential key drivers``, the output will be:
+
+====================== ============
+feature                correlation
+====================== ============
+on_time_shipment        0.797564499
+on_time_shipment_norm   0.797564499
+on_time_in_full         0.447146548
+on_time_in_full_norm    0.447146548
+turn_around_norm        0.294738949
+fill_rate_norm          0.236199741
+fill_rate               0.236025247
+velocity                0.229215039
+velocity_norm           0.228675473
+turn_around             -0.29681409
+====================== ============
+
+Python Modelling Agent
+^^^^^^^^^^^^^^^^^^^^^^
+This agent is capable of building machine learning and deep learning models using Python. This agent takes processed data from the :meth:`DataProcessorSQLAgent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` or :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and the question as input to generate a complex modeling code to answer the question and thereby generate model and predictions as output.
+
+Below are the inputs required for this agent:
+
++--------+-------------------------------+
+| Input  | Question                      |
+|        +-------------------------------+
+|        | Research (optional)           |
+|        +-------------------------------+
+|        | Plan                          |
+|        +-------------------------------+
+|        | Data Dictionary               |
+|        +-------------------------------+
+|        | Input Data Path               |
+|        +-------------------------------+
+|        | Output Folder Path            |
++--------+-------------------------------+
+| Output | Model object (PKL)            |
+|        +-------------------------------+
+|        | Intermediate output (CSV)     |
+|        +-------------------------------+
+|        | Test prediction (CSV)         |
+|        +-------------------------------+
+|        | Correlation matrix (CSV)      |
++--------+-------------------------------+
+
+
+**Flow**
+These activities listed below will be performed to complete the tasks assigned to Python Developer/ Python modeling agents:
+
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PlanGenerator``           | Generates plan that will be executed by ``PythonCodeGenerator``. This is needed because the manager generates the high-level task description which needs multiple further sub-steps to be performed to successfully perform the task                                                                                                                                                                                                            |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``DataDictionaryGenerator`` | Uses ``DataDictionaryUtils`` to add new keys in the data dictionary [num_unique, top_most_occurring_values, num_missing_values, descriptive_statistics (mean, median, mode)] . If any new columns are generated by previous tasks, we update the data dictionary of those columns alone in this. If the columns are used as it is from the input table, their corresponding descriptions are also taken as it is from the data dictionary.       |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PythonCodeGenerator``     | Generates the code, and executes it by ``CodeUtils``.                                                                                                                                                                                                                                                                                                                                                                                            |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``PythonCodeCorrector``     | Corrects the code, if any error is encountered. The original code that is generated in the previous step and the error message is passed to the LLM call for getting the updated and corrected code                                                                                                                                                                                                                                              |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ``DataDictionaryGenerator`` | Creates a new data dictionary for newly generated columns. If the previous steps create any new columns or rename any columns, the data dictionary is updated for those columns alone.                                                                                                                                                                                                                                                           |
++-----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+For Example, for the input Question, ``Build a regression model with \"efficiency\" as the target variable and all other numerical features as predictors. Use the model to identify the most important features driving \"efficiency\".``, the output will be:
+
+.. code-block:: text
+    :linenos:
+
+    R-squared score: 0.9986222634513674
+    Mean absolute error: 0.002815328515907459
+    Mean squared error: 1.0610120782181784e-05
+
+=====================  ===========
+Feature importance     Coefficient
+=====================  ===========
+fill_rate_norm         0.032137
+on_time_shipment       0.029450
+on_time_shipment_norm  0.029450
+velocity               0.025274
+turn_around            0.020899
+on_time_in_full        0.019587
+on_time_in_full_norm   0.019587
+fill_rate              0.012390
+turn_around_norm       0.003033
+velocity_norm          0.000605
+=====================  ===========
+
+The most important features driving efficiency are:
+``['fill_rate_norm', 'on_time_shipment', 'on_time_shipment_norm', 'velocity', 'turn_around', 'on_time_in_full', 'on_time_in_full_norm', 'fill_rate', 'turn_around_norm', 'velocity_norm']``
+
+The model has an R-squared score of 0.9986222634513674 which means that 99.86 % of the variance in efficiency can be explained by the model.
+The mean absolute error of the model is 0.0 and the mean squared error of the model is 0.0.
+
+Autogen Modelling Agent
+^^^^^^^^^^^^^^^^^^^^^^^
+This agent is capable of building machine learning and deep learning models using Python. This agent takes processed data from the :meth:`DataProcessorSQLAgent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>` or :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and the question as input to generate a complex modeling code to answer the question and thereby generate model and predictions as output.
+
+.. Note:: This agent is based on the Autogen framework that enables the development of LLM applications using multiple agents that can converse with each other to solve tasks. AutoGen agents are customizable, conversable, and seamlessly allow human participation. They can operate in various modes that employ combinations of LLMs, human inputs, and tools.
+
++--------+-------------------------------+
+| Input  | Question                      |
+|        +-------------------------------+
+|        | Data Dictionary               |
+|        +-------------------------------+
+|        | Input Data Path               |
+|        +-------------------------------+
+|        | Output Folder Path            |
++--------+-------------------------------+
+| Output | Model object (PKL)            |
+|        +-------------------------------+
+|        | Intermediate output (CSV)     |
+|        +-------------------------------+
+|        | Test prediction (CSV)         |
++--------+-------------------------------+
+
+
+Summarizer Agent
 ^^^^^^^^^^^^^^^^
+This agent takes the results of all the tasks successfully executed from :ref:`autonomous-agents-tools-docs-ref` and generates a summary for the given question.
 
-Generate summaries based on input data.
++--------+---------------------------------+
+| Input  | Question                        |
+|        +---------------------------------+
+|        | Result list (All Agent outputs) |
++--------+---------------------------------+
+| Output | Text Summary                    |
++--------+---------------------------------+
 
-**Returns**
-* ``final_summary`` (str): The generated final summary.
+**Example Summarizer output**
 
-**Example**
-Here is an example of how to use the ``/summarizer_agent`` endpoint in Python:
+.. code-block:: yaml
+    :linenos:
 
-.. code-block:: python
+    {
+        - To improve the efficiency of Location 22, we need to focus on the top 5 features driving efficiency which are velocity, turn_around_norm, fill_rate, turn_around, and on_time_shipment. These features were identified using a regression model built for Location 22 with "efficiency" as the target variable and all other numerical features as predictors. The model has a mean absolute error of 0.04 and an R-squared value of 0.89, indicating that the model can explain 89.27% of the variance in the target variable. The most important feature driving efficiency is the velocity with a coefficient of 0.02.
 
-    import requests
-    from pprint import pprint
+        - We can also generate insights about the key drivers of the efficiency of Location 22 based on the correlation analysis. The top three features highly correlated with efficiency are 'on_time_shipment', 'on_time_shipment_norm', and 'on_time_in_full', with correlation values of 0.7975644985699883, 0.7975644985699883, and 0.4471465475464717 respectively. The majority of correlation values (50% to 75%) fall within the range of 0.2654693452454858 to 0.4471465475464717, indicating these features are key drivers of efficiency.
 
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/summarizer_agent"
-
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "supply_chain",
-        "question": "Efficiency of a location depends on many factors. What factor is more correlated towards efficiency?",
-        "language": "english",
-        "result_list_path": "../../data/autonomous_agents/output/supply_chain/experiment_folder_new/orchestrator_op_20240528101839_6591/task_report.json"
+        - Therefore, to improve the efficiency of Location 22, we should focus on improving the velocity, turn_around_norm, fill_rate, turn_around, and on_time_shipment.
     }
 
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
-
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
-
-Refer to the following `link <url_autonomous_agents_29_>`_ to view sample output of Summarizer agent output.
-
-
-RAG Agent :meth:`/RAGAgent <api.rag_agent>`
+RAG Agent
 ^^^^^^^^^
+The RAG Agent is capable of answering queries based on a pool of documents. It is capable of extracting data from unstructured documents such as `pdf` or `txt`. It does this by first retrieving a list of documents using the Vector Database Tool. The summary is then generated using the Retrieval Augmented Generation Task.
 
-Execute a Retrieval-Augmented Generation (RAG) agent to answer a user's question.
++--------+---------------------------------------------+
+| Input  | Question                                    |
+|        +---------------------------------------------+
+|        | Data folder path (having pdf and txt files) |
++--------+---------------------------------------------+
+| Output | Response to the question                    |
++--------+---------------------------------------------+
 
-**Returns**
-* ``rag_answer`` (str) : The answer generated for the user query.
+.. _autonomous-agents-actions-docs-ref:
 
-**Example**
-Here is an example of how to use the ``/rag_agent`` endpoint in Python:
+Actions
+-------
+Actions are used by agents to get a response. Each agent will be performing a certain action to deliver the result. For example, the :meth:`ManagerAgent <autonomous_agents.agents.ManagerAgent>` will perform an action named :meth:`TaskListGenerator <autonomous_agents.actions.TaskListGenerator>`, to generate the task list, it will also use :meth:`ActionBase <autonomous_agents.actions.ActionBase>` to perform the reflection on the task list. All the actions use 1 or more LLM calls.
 
-.. code-block:: python
+currently, we have the following Actions:
 
-    import requests
-    from pprint import pprint
+task_list_generation
+^^^^^^^^^^^^^^^^^^^^
+This action is used for the Manager Agent. It takes a question, data dictionary, and available agent details as input, it generates a task list in 3 steps.
 
-    # Define the URL for the API endpoint
-    url = "http://localhost:8000/rag_agent"
+#. ``task_list_generation`` - It generates a task list with ``task_id``, ``agent_name`` and ``task_description``.
+#. ``assign_input_dependency`` - The response from step 1 goes to step 2 where all the ``task_id`` are assigned with ``input_task_id``.
+#. ``reflection`` - The response from step 2 goes to step 3 where it performs a reflection. It checks for redundancy and the format of the final ``task_list``.
 
-    # Create the request body with the necessary parameters
-    request_body = {
-        "domain_name": "luxury_retailer",
-        "document_path": "../../data/luxury_retailer/unstructured",
-        "question": "What is the warranty period for omega brand watches and is it international warranty?",
-        "num_retries": 2
+plan_generation
+^^^^^^^^^^^^^^^
+This action is used for :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`. It takes a question and a data dictionary from the agent as input and creates a plan ensuring the agent executes the given task appropriately.
+
+- :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` - The action generates a plan that looks into all the granular problems that could occur while generating a Python code. It specifies that these problems should be avoided while generating the Python code and the final goal of the plan would be to generate and save a dataframe that can be used to answer the question.
+- :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>` - The action generates a plan that directs the LLM to generate the proper model. The plan would cover key aspects of a model-building process such as train test split, hyperparameter tuning, model selection, and metrics evaluation.
+
+summary_generation
+^^^^^^^^^^^^^^^^^^
+This action is used for :meth:`SummarizerAgent <autonomous_agents.agents.SummarizerAgent>`. It takes the question, ``task_result``, and the ``task_list`` as input to summarize the result into simple text. This makes the raw data more readable.
+
+python_code_generation
+^^^^^^^^^^^^^^^^^^^^^^
+This action is used for :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`. It takes a question, plan, data dictionary, and data as input and generates Python code.
+
+- :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` - The action generates a Python code that solves the problem that is passed to it. It mentions all the problems that may occur while generating a code, and what shall be done if those problems are encountered.
+- :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>` - The action generates a Python code that performs various modeling tasks as mentioned in the plan that is created by :meth:`PlanGenerator <autonomous_agents.actions.PlanGenerator>`. It instructs the LLM such that the probability of getting an incorrect response is minimized.
+
+python_code_correction
+^^^^^^^^^^^^^^^^^^^^^^
+This action is used for :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`. Once the Python code is generated by :meth:`PythonCodeGenerator <autonomous_agents.actions.PythonCodeGenerator>`, if any error occurs while running the code, this action will be called.  It takes the code with an error message, debugs the code, and returns an error-free code.
+
+You can find an example `Here <url_autonomous_agents_16_>`_.
+
+The example shows a run for :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`. You can find the subtask for modeling in **sub_task_description.txt**. The folder **PythonCodeGenerator** has the generated code, **code_error.txt** file stores the error that was encountered. The folder **PythonCodeCorrector** stores the corrected code in **python_code.py** and the output generated by the code is stored in folder **2**.
+
+data_dictionary_generator
+^^^^^^^^^^^^^^^^^^^^^^^^^
+This action is used for :meth:`PythonDataAgent <autonomous_agents.agents.PythonDataAgent>` and :meth:`PythonModellingAgent <autonomous_agents.agents.PythonModellingAgent>`. It takes a data dictionary, Python code, and a small sample of the data generated by the code to return a data dictionary with the column name and description of the new columns that are formed while executing the code. This action only takes place if there are any new columns formed.
+
+action_base
+^^^^^^^^^^^
+this is the base class for all the Actions to interact with each other and the agents, all the base tasks are orchestrated from this class.
+
+retrieval_augmented_generation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+This action is used to generate a summary of a document using a Vector Database Tool. The summary is generated by first retrieving a list of documents using the Vector Database Tool. The summary is then generated using the OpenAI LLM call using the query, list of documents, and prompts in the config.
+
+.. _autonomous-agents-shared-memory-docs-ref:
+
+Shared Memory
+--------------
+Shared memory is designed to create an agent conversation and update the task list based on the conversation. The conversation will have the subgoal and details of outputs of each task executed till it is called. :meth:`Shared Memory <autonomous_agents.shared_memory.SharedMemory>` is called every time a task in the ``task_list`` is executed. If there is any error encountered during the execution of a particular task, shared memory changes the subsequent tasks in the ``task_list``. It will make sure that the failed task is not repeated in the ``updated_task_list``.
+
+The following changes can be made in the ``task_list``:
+
+#. It can change or rephrase the task description.
+#. If a task fails and any of the subsequent tasks are dependent on the failed task, shared memory can change the ``input_task_id`` for the subsequent tasks.
+#. If the ``input_task_id`` is assigned incorrectly, it will reassign it.
+
+For Example, if Plotly agent output is taken as input for another task,
+
+Shared memory utilizes ``vector_database`` to store the results of the tasks. This is done to open the prospect of searching and retrieving any relevant task results in the future. Below is the list of agents and the outputs that are stored for the respective agents.
+
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`Manager agent <autonomous_agents.agents.ManagerAgent>`                                      | task_list, subgoal                             |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`SQL data processor agent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>`     | agent_description, sub_task, status,response.  |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`Plotly chart generator agent <autonomous_agents.insights_pro_agents.PlotlyVisualizerAgent>` | agent_description, sub_task, status, response. |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`Insights generator agent <autonomous_agents.insights_pro_agents.InsightsGeneratorAgent>`    | agent_description, sub_task, status, response. |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`Python developer agent <autonomous_agents.agents.PythonDataAgent>`                          | agent_description, sub_task, status.           |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+| :meth:`Python modelling agent <autonomous_agents.agents.PythonModellingAgent>`                     | agent_description, sub_task, status.           |
++----------------------------------------------------------------------------------------------------+------------------------------------------------+
+
++--------+---------------------------------------------+
+| Input  | Task list (generated by Manager Agent)      |
+|        +---------------------------------------------+
+|        | Agent Conversation                          |
++--------+---------------------------------------------+
+| Output | Updated task list                           |
++--------+---------------------------------------------+
+
+For the input question, ```How does the on-road time affect the efficiency of a carrier?```, the original task list is:
+
+.. code-block:: yaml
+    :linenos:
+
+    {
+
+        [
+            {   "task_id": 0,
+                "name": "DataProcessorSQLAgent",
+                "description": "Extract the \"on_road_time\" and \"efficiency\" columns from the \"carrier_metrics_monthly\" table in the database.",
+                "data_dependency": null},
+            {   "task_id": 1,
+                "name": "PythonDataAgent",
+                "description": "Calculate the correlation between \"on_road_time\" and \"efficiency\".",
+                "data_dependency": 0 },
+            {   "task_id": 2,
+                "name": "PlotlyVisualizerAgent",
+                "description": "Generate a scatter plot with \"on_road_time\" on the x-axis and \"efficiency\" on the y-axis to visualize the relationship between these two variables.",
+                "data_dependency": 1},
+            {   "task_id": 3,
+                "name": "InsightsGeneratorAgent",
+                "description": "Generate insights on how \"on_road_time\" affects the \"efficiency\" of a carrier based on the correlation and the scatter plot.",
+                "data_dependency": 1}
+        ]
     }
 
-    # Send a POST request to the specified URL with the request body as JSON
-    response = requests.post(url, json=request_body)
+which gets updated to:
 
-    # Check if the request was successful
-    if response.status_code == 200:
-        print("Request was successful!")
-        pprint(response.json())
-    else:
-        print("Request failed with status code:", response.status_code)
-        print("Response data:", response.text)
+.. code-block:: yaml
+    :linenos:
 
-Refer to the following `link <url_autonomous_agents_28_>`_ to view sample output of rag output.
+    {
+        Updated Task List -
 
+        [
+            {   "task_id": 0,
+                "name": "DataProcessorSQLAgent",
+                "description": "Extract the \"on_road_time\" and \"efficiency\" columns from the \"carrier_metrics_monthly\" table in the database.",
+                "data_dependency": null},
+            {   "task_id": 1,
+                "name": "PythonDataAgent",
+                "description": "Calculate the correlation between \"on_road_time\" and \"efficiency\".",
+                "data_dependency": 0},
+            {   "task_id": 2,
+                "name": "PlotlyVisualizerAgent",
+                "description": "Generate a scatter plot with \"on_road_time\" on the x-axis and \"efficiency\" on the y-axis to visualize the relationship between these two variables.",
+                "data_dependency": 1},
+            {   "task_id": 3,
+                "name": "InsightsGeneratorAgent",
+                "description": "Generate insights on how \"on_road_time\" affects the \"efficiency\" of a carrier based on the correlation and the scatter plot.",
+                "data_dependency": 0}
+        ]
 
+    }
 
+Explanation - The ``data_dependency`` of ``task_id`` 3 was changed. while the tasks were being executed the plotly had failed with ``data_dependency`` on ``PythonDataAgent``. So for the next task execution, shared memory updated the ``data_dependency`` of ``task_id: 3`` to ``DataProcessorSQLAgent``
 
+.. _autonomous-agents-tools-docs-ref:
 
+Tools
+-----
+Tools are used to support the process and assist the agents in performing the tasks assigned to them. For example, if any query is generated by the :meth:`DataProcessorSQLAgent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>`, and it has created some columns. The :meth:`DataDictionaryUtils <autonomous_agents.tools.DataDictionaryUtils>` tool will add new columns to the latest data dictionary generated for the output.
 
+The following tools are available in the current version of Autonomous Agents:
 
+SummarizerUtils
+^^^^^^^^^^^^^^^
+This tool collates the results of the tasks that are executed successfully into a list of dictionaries. Thereby the generated list is used by the :meth:`SummarizerAgent <autonomous_agents.agents.SummarizerAgent>`.
 
+Below are the keys of the dictionary passed to the summarizer agent:
+
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| **Agent**                                                                                          | **Keys of Data Dictionary**                                                                                        |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| :meth:`SQL data processor agent <autonomous_agents.insights_pro_agents.DataProcessorSQLAgent>`     | output_type, data_dictionary, task_description, agent_name, agent_description, result_status, data_used.           |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| :meth:`Plotly chart generator agent <autonomous_agents.insights_pro_agents.PlotlyVisualizerAgent>` | output_type, task_description, agent_name, agent_description, result_status, data_used.                            |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| :meth:`Insights generator agent <autonomous_agents.insights_pro_agents.InsightsGeneratorAgent>`    | output_type, insights, task_description, agent_name, agent_description, result_status,data_used.                   |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| :meth:`Python developer agent <autonomous_agents.agents.PythonDataAgent>`                          | output_type, insights, data_dictionary, task_description, agent_name, agent_description, result_status, data_used. |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+| :meth:`Python modelling agent <autonomous_agents.agents.PythonModellingAgent>`                     | output_type, insights, task_description, agent_name, agent_description, result_status, data_used.                  |
++----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------+
+
+DataDictionaryUtils
+^^^^^^^^^^^^^^^^^^^
+As mentioned in the above example whenever there are any changes in the code data dictionary, this tool will update the output data dictionary. This tool will add the newly created columns and remove the columns which are not used in that particular scenario, by doing this we manage to keep the output as relevant as possible.
+
+CodeUtils
+^^^^^^^^^
+This tool contains the class :meth:`CodeUtils <autonomous_agents.tools.CodeUtils>`. This is an A utility class for running code snippets in various languages. It has various methods to execute a code written in Python language or any other language mentioned in the input. The tool is used by all the agents that may require any code execution.
+
+VectorDatabase
+^^^^^^^^^^^^^^
+This tool is used to create and search a vector database. The tool uses Chroma-db from the langchain vector store. The vector database is created using a given embedding and chunking strategy. The vector database is searched using a given retrieval strategy. The vector database tool can detect changes to the files in the database and update the database accordingly.
